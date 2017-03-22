@@ -1,0 +1,119 @@
+#!/usr/bin/env perl
+# Read in a BLAST  file and identify the organisms at X tax level
+
+use Bio::LITE::Taxonomy;
+use Bio::LITE::Taxonomy::NCBI;
+use Switch;
+
+use warnings;
+
+if ( $ARGV[0] eq "-h" ) { print STDERR "Usage: $0 <BLAST file dir> [ <taxlevel> <search term> ]\n\n" ; exit }
+
+my $inputdir = $ARGV[0];
+my $taxlevel = $ARGV[1] // 'superkingdom';
+my $findthis = $ARGV[2] // "Virus";
+
+opendir INDIR, $inputdir;
+
+
+my @blastfiles = grep /\.blast/, readdir(INDIR);
+
+closedir INDIR;
+
+
+
+#my $tax = Bio::LITE::Taxonomy::NCBI->new (
+#                                               names=> "/scicomp/home/fep2/taxonomy/161012/names.dmp",
+#                                               nodes=>"/scicomp/home/fep2/taxonomy/161012/nodes.dmp"
+#                                              );
+#my $tax = Bio::LITE::Taxonomy::NCBI->new ( names=> "/tmp/taxonomy/names.dmp", nodes=>"/tmp/taxonomy/nodes.dmp" );
+
+my $tax = Bio::LITE::Taxonomy::NCBI->new ( names=> "/scicomp/home/fep2/taxonomy/current/names.dmp", nodes=>"/scicomp/home/fep2/taxonomy/current/nodes.dmp" );
+
+print "Sample\tTaxon\tTotal_reads\tFirstchoice\tTop10\tTopButAlone\n";
+
+foreach my $file (@blastfiles) {
+	my $lastread = "xx"; 
+	my $counter = 0;	# number of reads
+ 	my $counter2 = 0;	# number of entries per read
+	my $positive1 = 0; 	#positive for search at first result
+	my $positive10 = 0;	#positive for search in other top10
+	my $mark1 = 0; my $mark1a = 0; my $mark10 = 0; my $strange = 0;
+	my $topeval = 1;
+	open my $blastfile, "$inputdir/$file";
+
+	my @name = split '\.',$file;
+	$findthis = $name[0]; $taxlevel = 'genus'; # activate to so individual searches
+	$findthis =~ s/_/ /;
+
+	#### Exceptions based on NCBI Taxonomy changes ##
+	# Find particular genera that have changed and update them to suit the newer Taxonomy download
+	switch ($findthis) {
+		case "Circovirus"	{ $findthis = "Gemycircularvirus" } # Apparently they changed it or something to Gemycircularvirus 2017-01-17
+	}
+	##################################################
+
+	while (<$blastfile>) { 
+
+
+		my @line = split '\t', $_;
+#		my @taxonomy = $tax->get_taxonomy_with_levels($line[6]);
+		my $levelname = $tax->get_term_at_level($line[6], $taxlevel);
+
+		if ($lastread eq $line[0]) { 
+			$counter2++;
+
+			if ( $levelname =~ /$findthis/ ) { 
+				$mark10 = 1 if $mark1 == 0;	# Mark this a read in the Top 10, if it's not already at #1
+				$mark1a = 1;			# Validates the 1st place hit
+			}
+			
+		} else { 
+			$positive1++  if ( $mark1 == 1 && $mark1a == 1 );
+			$positive10++ if $mark10 == 1;
+			$strange++ if ( $mark1 == 1 && $mark1a == 0 );	#case where there is only one hit for that virus, and it's on top.
+			$mark1 = 0; $mark10 = 0; $mark1a=0; 
+
+			$counter2 = 1;
+			$counter++;
+
+			if ( $levelname =~ /$findthis/ ) {   # New read is what we're looking for at top of BLAST results
+				#print "$line[0], $counter";
+				$mark1 = 1;
+#				$topeval=$line[2];	     #### TO DO - Add in Evalue check somehow to see if the first selection is much higher than the next one
+
+			}
+		}
+		if (eof) {
+			if ($mark1 == 1) {
+				if  ( $mark1a == 1 || $counter2 == 1) { $positive1++; } 
+					else { 
+						$strange++; }
+			}
+			if ($mark10 == 1) { $positive10++ ; }
+		}
+		$lastread = $line[0];
+	}
+
+	print "$name[1].$name[2]\t$name[0]\t$counter\t$positive1\t$positive10\t$strange\n";
+}
+
+
+
+
+
+# Takes taxonomy array of arrays and gets the particular taxonomy
+sub getTaxonByLevel  {
+	my ($taxonlevel, @thistaxonomy) = @_;
+	my $result = "undef";
+	foreach my $i (@thistaxonomy) {
+		my $z = $i->[1] ;
+		if ("$z" eq "$taxonlevel") { 
+			$result = $i->[0];
+			last;
+		}
+
+	}
+	return $result ;
+}
+
